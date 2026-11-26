@@ -11,6 +11,7 @@ const lctx = low.getContext('2d');
 const IMG = lctx.createImageData(W, H);
 const OUT = new Uint32Array(IMG.data.buffer);
 let S = 1, OX = 0, OY = 0, SHX = 0, SHY = 0;
+let UIB = []; // 今フレーム描いたボタン (ゲーム座標)
 const FONT = '"DotGothic16", "Hiragino Kaku Gothic ProN", "Yu Gothic", monospace';
 
 function resize() {
@@ -421,6 +422,13 @@ function box(x, y, w, h, fill, stroke, lw = 1) {
   ctx.fillStyle = fill; ctx.fillRect(OX + x * S, OY + y * S, w * S, h * S);
   if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw * S; ctx.strokeRect(OX + x * S + lw * S / 2, OY + y * S + lw * S / 2, w * S - lw * S, h * S - lw * S); }
 }
+function button(id, x, y, w, h, label, opt = {}) {
+  const pressed = UIB.prev && UIB.prev[id] && G.time - UIB.prev[id] < 0.12;
+  const col = opt.col || '#ffd35a';
+  box(x, y + (pressed ? 1 : 0), w, h, opt.fill || 'rgba(24,18,32,0.92)', col, 1);
+  T(label, x + w / 2, y + h / 2 - (opt.size || 8) / 2 + (pressed ? 1 : 0), opt.size || 8, opt.text || '#fff', 'center');
+  UIB.push({ id, x, y, w, h });
+}
 const HEART = ['.xx.xx.', 'xxxxxxx', 'xxxxxxx', '.xxxxx.', '..xxx..', '...x...'];
 function heart(x, y, full, col) {
   for (let j = 0; j < 6; j++) for (let i = 0; i < 7; i++) if (HEART[j][i] === 'x') {
@@ -472,31 +480,62 @@ function drawBanner() {
   T(b.title, 160 + slide, 84, 15, b.col, 'center', a);
 }
 
-function drawLobby() {
+function drawTitle() {
   const t = G.time;
-  T('鎖の探索隊', 160, 34 + Math.sin(t * 2) * 1.5, 22, '#ffd35a', 'center');
-  T('CHAIN EXPEDITION', 160, 58, 8, '#c9b48a', 'center');
-  const slots = 4, w = 72;
-  for (let i = 0; i < slots; i++) {
-    const x = 160 - (slots * (w + 4) - 4) / 2 + i * (w + 4), y = 140;
+  T('鎖の探索隊', 160, 26 + Math.sin(t * 2) * 1.5, 24, '#ffd35a', 'center');
+  T('CHAIN EXPEDITION — 鎖でつながる協力ローグライク', 160, 54, 7, '#c9b48a', 'center');
+  if (NET.screen === 'join') {
+    T('部屋コード (4けた) を入力', 160, 66, 8, '#e0d6c8', 'center');
+    const code = (NET.input + '____').slice(0, 4).split('').join(' ');
+    box(118, 77, 84, 16, 'rgba(10,8,14,0.85)', '#ffd35a');
+    T(code, 160, 80, 11, '#fff', 'center');
+    const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
+    keys.forEach((k, i) => button('k' + k, 62 + i * 20, 98, 17, 17, k, { size: 9 }));
+    button('del', 62, 120, 56, 16, '← 消す', { col: '#8d8597' });
+    button('back', 122, 120, 56, 16, 'もどる', { col: '#8d8597' });
+    button('go', 182, 120, 76, 16, '参加する！', { col: NET.input.length === 4 ? '#7ef08e' : '#4a4256', text: NET.input.length === 4 ? '#fff' : '#777' });
+  } else {
+    button('host', 90, 72, 140, 20, '部屋を作る (ホスト)', { size: 9 });
+    button('joinScreen', 90, 97, 140, 20, '部屋に入る (コード入力)', { size: 9, col: '#5aa8ff' });
+    button('solo', 90, 122, 140, 16, 'ひとりで練習 / この端末で遊ぶ', { size: 7, col: '#8d8597' });
+  }
+  if (NET.status) T(NET.status, 160, 142, 8, '#ffe9a0', 'center', 0.6 + 0.4 * Math.sin(t * 6));
+  if (NET.err) T(NET.err, 160, 152, 7.5, '#ff8a78', 'center');
+  if (G.best) T(`最高記録: ${G.best.win ? '踏破！' : `第${G.best.floor}層 ${G.best.room === 5 ? 'ボス' : G.best.room + '部屋'}`} (${G.best.np}人)`, 316, 172, 6.5, '#bfb39a', 'right');
+  T('スマホは横向きで遊んでね', 12, 172, 6.5, '#9a8fa8');
+}
+
+function drawLobby() {
+  const t = G.time, client = NET.mode === 'client', online = NET.mode === 'host' || client;
+  T('鎖の探索隊', 160, 32, 16, '#ffd35a', 'center');
+  if (online) {
+    box(100, 52, 120, 26, 'rgba(10,8,14,0.85)', '#ffd35a');
+    T('部屋コード', 160, 54, 7, '#c9b48a', 'center');
+    T(NET.code ? NET.code.split('').join(' ') : '…', 160, 63, 12, '#fff', 'center');
+    if (NET.mode === 'host') T('友達は「部屋に入る」でこの番号を入力', 160, 80, 7, '#cfc6d8', 'center');
+  }
+  const w = 72;
+  for (let i = 0; i < 4; i++) {
+    const x = 160 - (4 * (w + 4) - 4) / 2 + i * (w + 4), y = 140;
     const p = G.players.find((q) => q.idx === i);
-    box(x, y, w, 24, p ? 'rgba(20,16,28,0.85)' : 'rgba(10,8,14,0.6)', p ? p.col.css : '#3a3444');
+    box(x, y, w, 22, p ? 'rgba(20,16,28,0.85)' : 'rgba(10,8,14,0.6)', p ? p.col.css : '#3a3444');
     if (p) {
-      T(`${p.col.name} 参加中`, x + w / 2, y + 3, 8, p.col.css, 'center');
-      T(DEV_LABEL[p.dev] || p.dev, x + w / 2, y + 13, 6.5, '#cfc6d8', 'center');
+      const me = client ? p.idx === NET.myIdx : !isNetDev(p.dev);
+      T(`${p.col.name}${me ? ' (あなた)' : ''}`, x + w / 2, y + 3, 7.5, p.col.css, 'center');
+      T(isNetDev(p.dev) || p.dev === 'net' ? 'オンライン' : DEV_LABEL[p.dev] || p.dev, x + w / 2, y + 12.5, 6.5, '#cfc6d8', 'center');
     } else {
-      const a = 0.5 + 0.5 * Math.sin(t * 4 + i);
-      T(`${PCOL[i].name}`, x + w / 2, y + 3, 8, '#6d6578', 'center');
-      T('ダッシュボタンで参加', x + w / 2, y + 13, 6, '#8d8597', 'center', 0.5 + a * 0.5);
+      T(PCOL[i].name, x + w / 2, y + 3, 7.5, '#6d6578', 'center');
+      T(online ? '待機中…' : '空き', x + w / 2, y + 12.5, 6.5, '#8d8597', 'center', 0.5 + 0.5 * Math.sin(t * 4 + i));
     }
   }
-  T('左: WASD移動 F ダッシュ G アンカー   右: 矢印 . ダッシュ / アンカー   パッド: A ダッシュ B アンカー', 160, 126, 6, '#a99fb4', 'center');
-  if (G.players.length) {
-    const a = 0.6 + 0.4 * Math.sin(t * 5);
-    T(G.players.length === 1 ? 'Enter / START で出発 (1人なら鉄球が相棒)' : `Enter / START で ${G.players.length}人で出発！`, 160, 112, 8, '#ffe9a0', 'center', a);
-  }
-  if (G.best) T(`最高記録: ${G.best.win ? '踏破！' : `第${G.best.floor}層 ${G.best.room === 5 ? 'ボス' : G.best.room + '部屋'}`} (${G.best.np}人)`, 316, 172, 6.5, '#bfb39a', 'right');
-  T('アンカー(長押し)で踏ん張り、仲間を振り回して鎖で切り裂け！ 人形で練習できるよ', 12, 172, 6.5, '#9a8fa8');
+  if (client) T('ホストが出発するのを待っています… 人形で練習しよう！', 160, 124, 7.5, '#ffe9a0', 'center', 0.6 + 0.4 * Math.sin(t * 5));
+  else if (G.players.length) button('start', 120, 110, 80, 18, G.players.length === 1 ? '出発！ (鉄球と)' : `${G.players.length}人で出発！`, { size: 8.5, col: '#7ef08e' });
+  else T('キーボード: F / . で参加  パッド: A で参加', 160, 116, 7, '#a99fb4', 'center');
+  button('leave', 4, 12, 40, 13, '← 戻る', { size: 7, col: '#8d8597' });
+  if (!TOUCH.used && !client) T('左: WASD F G   右: 矢印 . /   パッド: A B', 160, 129, 6, '#a99fb4', 'center');
+  T('アンカー(長押し)で踏ん張り、仲間を振り回して鎖で切り裂け！', 12, 172, 6.5, '#9a8fa8');
+  if (NET.status) T(NET.status, 316, 172, 6.5, '#ffe9a0', 'right');
+  if (NET.err) T(NET.err, 316, 164, 6.5, '#ff8a78', 'right');
 }
 
 function wrapText(text, maxW, size) {
@@ -520,12 +559,15 @@ function drawChoose() {
     const x = 160 - (3 * w + 2 * gap) / 2 + i * (w + gap), sel = i === c.sel;
     const y = 48 - (sel ? 4 : 0) + (1 - ease.outBack(clamp((c.t - i * 0.06) / 0.3))) * 30;
     box(x, y, w, 100, sel ? 'rgba(40,30,50,0.97)' : 'rgba(20,16,28,0.92)', sel ? c.who.col.css : '#4a4256', sel ? 2 : 1);
+    UIB.push({ id: 'card' + i, x, y, w, h: 100 });
     T(u.icon, x + w / 2, y + 8, 16, '#fff', 'center');
     T(u.name, x + w / 2, y + 30, 9, sel ? '#fff' : '#d8cfe0', 'center');
     T(`Lv ${lv(u.id)} → ${lv(u.id) + 1}`, x + w / 2, y + 43, 7, '#ffd35a', 'center');
     wrapText(u.desc, w - 10, 6.5).forEach((ln, k) => T(ln, x + 5, y + 55 + k * 9, 6.5, '#bdb2c8'));
   });
-  T('← → で選んで、ダッシュボタンで決定', 160, 158, 7, '#cfc6d8', 'center', 0.7 + 0.3 * Math.sin(G.time * 5));
+  const mine = NET.mode === 'client' ? c.who.idx === NET.myIdx : !isNetDev(c.who.dev);
+  const hint = !mine ? `${c.who.col.name} が選んでいます…` : TOUCH.used ? 'カードをタップで選んで、もう一度タップで決定' : '← → で選んで、ダッシュボタンで決定 (クリックでもOK)';
+  T(hint, 160, 158, 7, mine ? '#cfc6d8' : c.who.col.css, 'center', 0.7 + 0.3 * Math.sin(G.time * 5));
 }
 
 function drawEnd() {
@@ -541,10 +583,17 @@ function drawEnd() {
   ];
   lines.forEach((l, i) => T(l, 160, 70 + i * 14, i === 3 ? 6.5 : 8, '#e0d6c8', 'center', a));
   if (G.newBest) T('★ 最高記録更新！', 160, 128, 9, '#ffe066', 'center', a);
-  if (G.overT > 1.2) T('Enter / ダッシュ でロビーへ', 160, 146, 8, '#cfc6d8', 'center', 0.6 + 0.4 * Math.sin(G.time * 5));
+  if (G.overT > 1.2) {
+    if (NET.mode === 'client') T('ホストがロビーに戻るのを待っています…', 160, 146, 8, '#cfc6d8', 'center', 0.6 + 0.4 * Math.sin(G.time * 5));
+    else button('toLobby', 115, 142, 90, 18, 'ロビーへ', { size: 9 });
+  }
 }
 
 function render() {
+  UIB.prev = UIB.pressed || {};
+  const keep = UIB.pressed || {};
+  for (const b of UIB) if (b.press) keep[b.id] = b.press;
+  UIB = []; UIB.pressed = keep; UIB.prev = keep;
   renderWorld();
   lctx.putImageData(IMG, 0, 0);
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -554,25 +603,40 @@ function render() {
   ctx.drawImage(low, OX + SHX, OY + SHY, W * S, H * S);
   drawHUD();
   drawPopups();
+  if (G.state === 'title') drawTitle();
   if (G.state === 'lobby') drawLobby();
+  if (G.state === 'play' && TOUCH.used && NET.mode !== 'client' && !G.choose) button('pause', 150, 171, 20, 8.5, 'Ⅱ', { size: 6.5, col: '#8d8597' });
   drawBanner();
   drawChoose();
   if (G.state === 'over' || G.state === 'win') drawEnd();
   if (G.paused) { ctx.globalAlpha = 0.6; box(0, 0, 320, 180, '#000'); ctx.globalAlpha = 1; T('ポーズ中', 160, 76, 16, '#fff', 'center'); T('Esc / P / START で再開', 160, 98, 8, '#cfc6d8', 'center'); }
+  drawTouchControls();
+  if (canvas.height > canvas.width) {
+    ctx.fillStyle = 'rgba(0,0,0,0.85)'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const u = canvas.width / 100;
+    ctx.fillStyle = '#ffd35a'; ctx.font = `${Math.round(u * 6)}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📱 スマホを横向きにしてね', canvas.width / 2, canvas.height / 2);
+  }
   if (G.fade > 0) { ctx.globalAlpha = clamp(G.fade); ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.globalAlpha = 1; }
 }
 
 // ---------------------------------------------------------------- ループ
 recalc();
-loadRoom(1, 0);
+toTitle();
 let last = performance.now(), acc = 0;
 function loop(now) {
   let dt = (now - last) / 1000; last = now;
   if (dt > 0.1) dt = 0.1;
   acc += dt;
-  let n = 0;
-  while (acc >= STEP && n++ < 6) { update(STEP); acc -= STEP; }
+  if (NET.mode === 'client') { acc = 0; clientFrame(dt); }
+  else {
+    let n = 0;
+    while (acc >= STEP && n++ < 6) { update(STEP); acc -= STEP; }
+    netTick(dt);
+  }
   render();
   requestAnimationFrame(loop);
 }
-requestAnimationFrame(loop);
+// すべてのスクリプトが読み込まれてから開始
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => requestAnimationFrame(loop));
+else requestAnimationFrame(loop);

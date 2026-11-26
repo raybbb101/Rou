@@ -232,6 +232,11 @@ function drawTpl(tpl, cmap, x, y, opt = {}) {
     }
 }
 
+// 再現性のある乱数 (seed が同じなら同じ並び)
+function mulberry(a) {
+  return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
 // ---------------------------------------------------------------- noise
 function hash2(x, y, s = 0) {
   let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(s | 0, 1442695041);
@@ -337,7 +342,7 @@ const KEYSETS = {
   kbA: { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], dash: ['KeyF'], anchor: ['KeyG'] },
   kbB: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], dash: ['Period', 'Numpad1', 'Numpad0'], anchor: ['Slash', 'Numpad2', 'NumpadDecimal'] },
 };
-const DEV_LABEL = { kbA: 'キーボード左', kbB: 'キーボード右', pad0: 'パッド1', pad1: 'パッド2', pad2: 'パッド3', pad3: 'パッド4' };
+const DEV_LABEL = { touch: 'スマホ', net: 'オンライン', kbA: 'キーボード左', kbB: 'キーボード右', pad0: 'パッド1', pad1: 'パッド2', pad2: 'パッド3', pad3: 'パッド4' };
 window.addEventListener('keydown', (e) => {
   if (!KB.has(e.code)) KB_PRESS.add(e.code);
   KB.add(e.code);
@@ -371,6 +376,8 @@ function readDevices() {
     if (m < 0.25) { x = 0; y = 0; } else if (m > 1) { x /= m; y /= m; }
     out['pad' + i] = { x, y, dash: b(0) || b(5), anchor: b(1) || b(2) || b(4) || b(7), start: b(9) };
   }
+  if (typeof touchDevices === 'function') touchDevices(out);
+  if (typeof netDevices === 'function') netDevices(out);
   for (const id in out) {
     const s = out[id], p = devPrev[id] || { dash: false, anchor: false, start: false, x: 0, y: 0 };
     s.dashP = (s.dash && !p.dash) || !!s.tapDash;

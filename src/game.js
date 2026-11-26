@@ -78,6 +78,11 @@ function recalc() {
   G.maxHp = 5 + lv('heart');
 }
 
+function buzz(idx, ms) {
+  const p = G.players.find((q) => q.idx === idx);
+  const mine = NET.mode === 'client' ? idx === NET.myIdx : p && !isNetDev(p.dev);
+  if (mine && navigator.vibrate) try { navigator.vibrate(ms); } catch (e) {}
+}
 function addPopup(x, y, text, col = '#fff', size = 7, life = 0.8) { G.popups.push({ x, y, text, col, size, life, t: 0 }); }
 function shake(a) { G.shake = Math.max(G.shake, a); }
 function hitstop(t) { G.hitstop = Math.max(G.hitstop, t); }
@@ -88,9 +93,10 @@ function inPit(x, y, m = 0) {
   return false;
 }
 
+let roomUid = 0, entityUid = 0;
 function genRoom(floor, idx, kind) {
   const th = THEMES[floor];
-  const room = { floor, idx, kind, theme: th, pits: [], pillars: [], torches: [44, 104, 216, 276], seed: randi(1, 99999), phase: 'fight', waves: [], door: 0, clearT: 0 };
+  const room = { uid: ++roomUid + '-' + randi(0, 1e6), floor, idx, kind, theme: th, pits: [], pillars: [], torches: [44, 104, 216, 276], seed: randi(1, 99999), phase: 'fight', waves: [], door: 0, clearT: 0 };
   const okSpot = (x, y, r) => {
     if (dist(x, y, 160, 150) < 40 || dist(x, y, DOOR_X, 34) < 30) return false;
     for (const p of room.pillars) if (dist(x, y, p.x, p.y) < p.r + r + 14) return false;
@@ -124,6 +130,8 @@ function genRoom(floor, idx, kind) {
 
 function buildBg(room) {
   const th = room.theme, F = th.floor, Wr = th.wall, s = room.seed;
+  // ゲストの画面でも同じ部屋になるよう、乱数は部屋の seed から作る
+  const rr = mulberry(s), R_ = (a, b) => a + rr() * (b - a), RI = (a, b) => Math.floor(R_(a, b + 1));
   const bg = new Uint32Array(N), glow = new Float32Array(N * 3);
   room.bg = bg; room.bgGlow = glow; room.hasGlow = false;
   for (let y = 0; y < H; y++)
@@ -162,7 +170,7 @@ function buildBg(room) {
     }
   // 石ころ: 1px のハイライトと影
   for (let i = 0; i < 70; i++) {
-    const x = randi(14, 305), y = randi(30, 168);
+    const x = RI(14, 305), y = RI(30, 168);
     bg[y * W + x] = F[4]; if (y + 1 < H) bg[(y + 1) * W + x] = F[0];
   }
   const put = (x, y, c) => { if (x >= 0 && y >= 0 && x < W && y < H) bg[y * W + x] = c; };
@@ -170,8 +178,8 @@ function buildBg(room) {
   // テーマ別の飾り
   if (th.accent === 'crystal') {
     for (let i = 0; i < 14; i++) {
-      const edge = Math.random() < 0.6, x = edge ? randi(16, 304) : randi(20, 300), y = edge ? randi(27, 30) : randi(40, 165);
-      const h = randi(3, 7), R = PAL.frost;
+      const edge = rr() < 0.6, x = edge ? RI(16, 304) : RI(20, 300), y = edge ? RI(27, 30) : RI(40, 165);
+      const h = RI(3, 7), R = PAL.frost;
       for (let j = 0; j < h; j++) for (let k = -Math.floor((h - j) / 3); k <= Math.floor((h - j) / 3); k++) put(x + k, y - j, k < 0 ? R[4] : k > 0 ? R[2] : R[3]);
       put(x, y - h, R[5]);
       for (let gy = -10; gy <= 6; gy++) for (let gx = -8; gx <= 8; gx++) { const d = Math.hypot(gx, gy * 1.3) / 10; if (d < 1) addG(x + gx, y - 3 + gy, R[3], 0.22 * (1 - d) * (1 - d)); }
@@ -179,10 +187,10 @@ function buildBg(room) {
   }
   if (th.accent === 'lava') {
     for (let i = 0; i < 5; i++) {
-      let x = rand(30, 290), y = rand(45, 160), a = rand(0, TAU);
-      const len = randi(25, 60);
+      let x = R_(30, 290), y = R_(45, 160), a = R_(0, TAU);
+      const len = RI(25, 60);
       for (let j = 0; j < len; j++) {
-        a += rand(-0.5, 0.5); x += Math.cos(a); y += Math.sin(a) * 0.7;
+        a += R_(-0.5, 0.5); x += Math.cos(a); y += Math.sin(a) * 0.7;
         if (x < 14 || x > 306 || y < 32 || y > 166) break;
         const R = PAL.magma;
         put(Math.floor(x), Math.floor(y), j % 7 === 0 ? R[5] : R[4]);
@@ -358,6 +366,7 @@ function damagePlayer(p, dmg, force = false) {
   if (p.kind !== 'player' || p.state !== 'alive') return false;
   if (!force && (p.inv > 0 || p.dashT > 0)) return false;
   p.hp -= dmg; p.inv = 1.0;
+  buzz(p.idx, p.hp <= 0 ? 300 : 70);
   sfx('hurt'); shake(3); hitstop(0.06);
   fxHit(p.x, p.y - 6, 0, -1, PAL.blood, 1.5);
   addPopup(p.x, p.y - 18, `-${dmg}`, '#ff6b6b', 8);
@@ -537,7 +546,7 @@ function makeEnemy(type, x, y) {
   const d = ETYPES[type], np = Math.max(1, G.players.length);
   const mul = d.dummy ? 1 : (1 + 0.42 * (G.floor - 1) + 0.05 * Math.max(0, G.roomIdx - 1)) * (1 + 0.22 * (np - 1));
   const e = {
-    type, x, y, vx: 0, vy: 0, r: d.r, hp: d.hp * mul, maxHp: d.hp * mul, t: rand(0, 1), st: 'idle', stT: rand(0.3, 1), face: 1, faceA: 0,
+    id: ++entityUid, type, x, y, vx: 0, vy: 0, r: d.r, hp: d.hp * mul, maxHp: d.hp * mul, t: rand(0, 1), st: 'idle', stT: rand(0.3, 1), face: 1, faceA: 0,
     flash: 0, burn: 0, slow: 0, chainCd: 0, kbT: 0, z: 0, big: !!d.big, flying: !!d.flying, dead: false, cd: rand(1, 2.5), dir: 0, seed: rand(0, 100),
   };
   if (type === 'golem') { e.st = 'intro'; e.stT = 1.4; e.atkT = 2; e.bindCd = 0; e.enraged = false; e.name = G.room.theme.boss; }
@@ -711,7 +720,7 @@ function moveEnemy(e, dt) {
   }
 }
 
-function fireBullet(x, y, a, sp, R) { G.bullets.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: 3, t: 0, life: 4.5, R }); }
+function fireBullet(x, y, a, sp, R) { G.bullets.push({ id: ++entityUid, x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, r: 3, t: 0, life: 4.5, R }); }
 
 // ---------------------------------------------------------------- ボス
 function updateBoss(e, dt, tgt, dx, dy, dd, sm) {
@@ -1008,28 +1017,46 @@ function toLobby() {
 }
 
 // ---------------------------------------------------------------- 参加
+function addPlayer(dev) {
+  const used = new Set(G.players.map((q) => q.idx));
+  let idx = 0; while (used.has(idx)) idx++;
+  const np = makePlayer(dev, idx);
+  np.hp = G.maxHp;
+  np.x = 120 + idx * 26; np.y = 130; np.safeX = np.x; np.safeY = np.y;
+  G.players.push(np);
+  G.players.sort((a, b) => a.idx - b.idx);
+  rebuildRopes();
+  sfx('confirm');
+  fxRevive(np.x, np.y, np.col.R.concat([WHITE]));
+  addPopup(np.x, np.y - 20, `${np.col.name} 参加！`, np.col.css, 8, 1.2);
+  return np;
+}
 function handleJoin() {
   for (const id in INPUT) {
+    if (isNetDev(id)) continue;
     const s = INPUT[id];
-    const p = G.players.find((q) => q.dev === id);
-    if (!p && s.dashP && G.players.length < 4) {
-      const used = new Set(G.players.map((q) => q.idx));
-      let idx = 0; while (used.has(idx)) idx++;
-      const np = makePlayer(id, idx);
-      np.hp = G.maxHp;
-      np.x = 120 + idx * 26; np.y = 130;
-      G.players.push(np);
-      G.players.sort((a, b) => a.idx - b.idx);
-      rebuildRopes();
-      sfx('confirm');
-      fxRevive(np.x, np.y, np.col.R.concat([WHITE]));
-      addPopup(np.x, np.y - 20, `${np.col.name} 参加！`, np.col.css, 8, 1.2);
-    }
+    if (s.dashP && G.players.length < 4 && !G.players.find((q) => q.dev === id)) addPlayer(id);
   }
-  if (keyPressed('Backspace') && G.players.length) {
-    G.players.pop(); rebuildRopes(); sfx('select');
+  if (keyPressed('Backspace')) {
+    const local = G.players.filter((q) => !isNetDev(q.dev));
+    if (local.length) { const q = local[local.length - 1]; G.players = G.players.filter((x) => x !== q); rebuildRopes(); sfx('select'); }
   }
 }
+
+// タイトル ⇄ ロビー
+function toTitle() {
+  G.state = 'title'; G.players = []; G.ball = null; G.ropes = []; G.choose = null; G.paused = false; G.banner = null;
+  G.upg = {}; recalc();
+  loadRoom(1, 0);
+  NET.screen = 'main';
+}
+function enterLobby(withTouch) {
+  if (NET.mode === 'off') NET.mode = 'solo';
+  G.state = 'lobby'; G.players = []; G.upg = {}; recalc();
+  loadRoom(1, 0);
+  if (withTouch) addPlayer('touch');
+}
+function leaveLobby() { netClose(); toTitle(); sfx('select'); }
 
 // ---------------------------------------------------------------- メイン更新
 function update(dt) {
@@ -1060,11 +1087,20 @@ function update(dt) {
     return;
   }
 
-  if ((keyPressed('Escape') || keyPressed('KeyP') || (G.state === 'play' && Object.values(INPUT).some((s) => s.startP))) && G.room.phase !== 'choose') {
+  if (G.state !== 'title' && (keyPressed('Escape') || keyPressed('KeyP') || (G.state === 'play' && Object.values(INPUT).some((s) => s.startP))) && G.room.phase !== 'choose') {
     G.paused = !G.paused; sfx('select');
   }
   if (G.paused) { clearPressed(); return; }
 
+  if (G.state === 'title') {
+    if (NET.screen === 'join') {
+      for (let d = 0; d <= 9; d++) if ((keyPressed('Digit' + d) || keyPressed('Numpad' + d)) && NET.input.length < 4) NET.input += d;
+      if (keyPressed('Backspace')) NET.input = NET.input.slice(0, -1);
+      if (keyPressed('Enter') && NET.input.length === 4) netJoin(NET.input);
+      if (keyPressed('Escape')) NET.screen = 'main';
+    } else if (keyPressed('Enter')) enterLobby(false);
+    updateFx(dt); clearPressed(); return;
+  }
   if (G.state === 'lobby') {
     handleJoin();
     if (G.players.length && (keyPressed('Enter') || Object.values(INPUT).some((s) => s.startP))) startRun();
@@ -1184,20 +1220,28 @@ function update(dt) {
   clearPressed();
 }
 
+function choosePick(i) {
+  const c = G.choose;
+  if (!c || i == null || i < 0 || i >= c.opts.length) return;
+  if (c.sel === i && c.t > 0.4) confirmChoose();
+  else { c.sel = i; sfx('select'); }
+}
+function confirmChoose() {
+  const c = G.choose, u = c.opts[c.sel];
+  applyUpgrade(u);
+  sfx('confirm');
+  addPopup(c.who.x, c.who.y - 20, `${u.icon} ${u.name}`, c.who.col.css, 9, 1.5);
+  for (const p of G.players) fxRevive(p.x, p.y, PAL.gold);
+  G.choose = null;
+  G.room.phase = 'open';
+  sfx('door');
+}
 function updateChoose(dt) {
   const c = G.choose;
   c.t += dt;
   const s = INPUT[c.who.dev] || {};
+  if (s.pick != null) { choosePick(s.pick); return; }
   if (s.leftP) { c.sel = (c.sel + c.opts.length - 1) % c.opts.length; sfx('select'); }
   if (s.rightP) { c.sel = (c.sel + 1) % c.opts.length; sfx('select'); }
-  if (c.t > 0.5 && s.dashP) {
-    const u = c.opts[c.sel];
-    applyUpgrade(u);
-    sfx('confirm');
-    addPopup(c.who.x, c.who.y - 20, `${u.icon} ${u.name}`, c.who.col.css, 9, 1.5);
-    for (const p of G.players) fxRevive(p.x, p.y, PAL.gold);
-    G.choose = null;
-    G.room.phase = 'open';
-    sfx('door');
-  }
+  if (c.t > 0.5 && s.dashP) confirmChoose();
 }
